@@ -1,0 +1,9 @@
+# Deployment fallback for a remote host with a slow GHCR dependency layer.
+# The running worker already contains the locked evaluation dependencies.
+FROM agenthub-evaluation-worker:2.0.0
+
+WORKDIR /app
+USER root
+COPY backend /app/backend
+RUN chown -R app:app /app/backend
+USER app

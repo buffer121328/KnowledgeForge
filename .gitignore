@@ -1,0 +1,62 @@
+# Operating system and editor files
+.DS_Store
+.idea/
+.vscode/
+# Secrets and local environment overrides
+.env
+.env.*
+config/.env
+# Python and uv generated files
+backend/.venv/
+**/__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+# Runtime data; never commit uploads, logs, or local state
+backend/uploads/
+backend/logs/
+/logs/
+*.log
+# Frontend generated files
+frontend/node_modules/
+frontend/dist/
+frontend/coverage/
+*.tsbuildinfo
+frontend/vite.config.js
+frontend/vite.config.d.ts
+# Evaluation corpus and documents stay local-only: company-demo docx/txt
+# documents, normalized text, benchmark jsonl, manifests and review records.
+# The evaluation package code itself stays tracked; only its data/ payload
+# is excluded.
+/backend/evaluation/data/
+
+# Downloaded remote diagnostics
+remote-logs/
+
+/backend/data/evidence-review/
+/backend/data/bm25/
+/.uv-cache
+/.npm-cache/
+/reference
+/.codegraph
+/.codex
+/deploy/k8s
+.github
+/openspec
+# Local tooling state and personal files; never commit
+.jbeval/
+.uv-tools/
+.zcode/
+/backend/.uv-cache/
+/INTERVIEW_PREP*
+# Project docs kept local only
+/rules/
+/docs/
+# The committed config template must stay trackable despite the .env.* rules above
+!config/.env.example

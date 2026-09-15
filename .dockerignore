@@ -1,0 +1,73 @@
+# Repository metadata and local tools
+.git
+.github
+.codex
+.idea
+.jbeval
+.agents
+.uv-cache
+.vite
+.DS_Store
+
+# Secrets and local environment overrides
+.env
+.env.*
+config/.env
+
+# Python environments, caches, tests, and runtime data
+backend/.venv
+backend/.uv-cache
+backend/.pytest_cache
+backend/tests
+backend/.coverage
+backend/htmlcov
+# Evaluation authoring/results stay out of images, except for the immutable
+# evidence-gates seed bundle and the 41-document identity manifest required by
+# the governance workspace at runtime.
+backend/evaluation/data/*
+!backend/evaluation/data/evidence-gates/
+!backend/evaluation/data/evidence-gates/**
+!backend/evaluation/data/company-demo/
+backend/evaluation/data/company-demo/*
+!backend/evaluation/data/company-demo/corpus_manifest.json
+# Candidate answers are verified against only these normalized source documents
+# at runtime. Keep this bounded set with the API/Worker rather than copying the
+# whole local evaluation corpus into production images.
+!backend/evaluation/data/company-demo/reference-answer-candidates.json
+!backend/evaluation/data/company-demo/normalized/
+backend/evaluation/data/company-demo/normalized/*
+!backend/evaluation/data/company-demo/normalized/administration/
+backend/evaluation/data/company-demo/normalized/administration/*
+!backend/evaluation/data/company-demo/normalized/administration/173印章管理.txt
+!backend/evaluation/data/company-demo/normalized/finance/
+backend/evaluation/data/company-demo/normalized/finance/*
+!backend/evaluation/data/company-demo/normalized/finance/198中小企业财务部岗位职责.txt
+!backend/evaluation/data/company-demo/normalized/finance/201资产盘点管理制度.txt
+!backend/evaluation/data/company-demo/normalized/human_resources/
+backend/evaluation/data/company-demo/normalized/human_resources/*
+!backend/evaluation/data/company-demo/normalized/human_resources/055公司人才招聘与入职管理制度.txt
+!backend/evaluation/data/company-demo/normalized/human_resources/056公司人力资源管理制度.txt
+!backend/evaluation/data/company-demo/normalized/human_resources/093绩效考核管理制度.txt
+!backend/evaluation/data/company-demo/normalized/human_resources/105离职管理制度.txt
+!backend/evaluation/data/company-demo/normalized/human_resources/186员工晋升晋级管理制度.txt
+backend/evaluation/results
+backend/uploads
+backend/logs
+**/__pycache__
+**/*.py[cod]
+.coverage
+.coverage.*
+
+# Frontend dependencies and generated output
+frontend/node_modules
+frontend/dist
+frontend/coverage
+frontend/*.tsbuildinfo
+frontend/vite.config.js
+frontend/vite.config.d.ts
+
+# Non-runtime project material
+openspec
+rules
+docs
+deploy

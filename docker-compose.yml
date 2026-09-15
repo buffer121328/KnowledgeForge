@@ -1,0 +1,289 @@
+x-backend-service: &backend-service
+  restart: unless-stopped
+  init: true
+  env_file:
+    - ./config/.env
+  networks:
+    - agenthub
+
+x-backend-environment: &backend-environment
+  PYTHONPATH: /app/backend
+  NEO4J_URI: bolt://neo4j:7687
+  CHROMA_HOST: chromadb
+  CHROMA_PORT: 8000
+  REDIS_URL: redis://redis:6379/0
+  RATE_LIMIT_STORAGE_URI: redis://redis:6379/4
+  AUTH_REDIS_URL: redis://redis:6379/1
+  CELERY_BROKER_URL: redis://redis:6379/2
+  CELERY_RESULT_BACKEND: redis://redis:6379/3
+  KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+  UPLOAD_DIR: /app/uploads
+  QA_BM25_INDEX_PATH: /app/data/bm25
+  DATABASE_URL: postgresql+psycopg2://knowledgeforge:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in config/.env}@postgres:5432/knowledgeforge
+
+services:
+  # ── PostgreSQL（结构化业务事实；schema 由显式迁移命令管理） ──
+  postgres:
+    image: postgres:17-alpine
+    container_name: agenthub-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: knowledgeforge
+      POSTGRES_USER: knowledgeforge
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in config/.env}
+    ports:
+      - "${POSTGRES_BIND_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - agenthub
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U knowledgeforge -d knowledgeforge"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  postgres-migrate:
+    <<: *backend-service
+    # Reuse the API image so migration and runtime code stay identical.
+    image: agenthub-api:2.0.0
+    profiles: ["tools"]
+    environment:
+      <<: *backend-environment
+    command: ["python", "-m", "infrastructure.postgresql_migrations", "upgrade"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # ── Neo4j 知识图谱数据库 ──────────────────────
+  neo4j:
+    image: neo4j:5-community
+    container_name: agenthub-neo4j
+    restart: unless-stopped
+    ports:
+      - "${NEO4J_HTTP_BIND_PORT:-7474}:7474"   # Web UI
+      - "${NEO4J_BOLT_BIND_PORT:-7687}:7687"   # Bolt
+    environment:
+      NEO4J_AUTH: "neo4j/${NEO4J_PASSWORD:?Set NEO4J_PASSWORD in config/.env}"
+      NEO4J_PLUGINS: '["apoc"]'
+    volumes:
+      - neo4j_data:/data
+    networks:
+      - agenthub
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:7474 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  # ── ChromaDB 向量数据库 ───────────────────────
+  chromadb:
+    image: chromadb/chroma:1.5.9
+    container_name: agenthub-chromadb
+    restart: unless-stopped
+    ports:
+      - "${CHROMA_BIND_PORT:-8000}:8000"
+    volumes:
+      - chroma_data:/data
+    environment:
+      ANONYMIZED_TELEMETRY: "false"
+    networks:
+      - agenthub
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          bash -ec 'exec 3<>/dev/tcp/127.0.0.1/8000;
+          printf "GET /api/v2/heartbeat HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n" >&3;
+          grep -q "200 OK" <&3'
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+
+  # ── Redis（认证黑名单 / 限流 / 缓存 / Celery Broker） ──
+  redis:
+    image: redis:7-alpine
+    container_name: agenthub-redis
+    restart: unless-stopped
+    ports:
+      - "${REDIS_BIND_PORT:-6379}:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - agenthub
+    command: ["redis-server", "--appendonly", "yes"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+
+  # ── Kafka（KRaft；容器和宿主机使用独立监听器） ──
+  kafka:
+    image: confluentinc/cp-kafka:7.7.0
+    container_name: agenthub-kafka
+    restart: unless-stopped
+    ports:
+      - "${KAFKA_BIND_PORT:-9092}:9092"
+    environment:
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_NODE_ID: 1
+      CLUSTER_ID: MkU3OEVBNTcwNTJENDM2Qk
+      KAFKA_LISTENERS: INTERNAL://0.0.0.0:29092,EXTERNAL://0.0.0.0:9092,CONTROLLER://0.0.0.0:29093
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka:29092,EXTERNAL://localhost:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,INTERNAL:PLAINTEXT,EXTERNAL:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:29093
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+    volumes:
+      - kafka_data:/var/lib/kafka/data
+    networks:
+      - agenthub
+    healthcheck:
+      test: ["CMD-SHELL", "kafka-topics --bootstrap-server localhost:29092 --list || exit 1"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+
+  # ── Python API 服务 ───────────────────────────
+  api:
+    <<: *backend-service
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    image: agenthub-api:2.0.0
+    container_name: agenthub-api
+    ports:
+      - "${API_BIND_PORT:-8080}:8080"
+    environment:
+      <<: *backend-environment
+      AUDIT_LOG_FILE: /app/logs/audit.log
+    depends_on:
+      neo4j:
+        condition: service_healthy
+      chromadb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    volumes:
+      - uploads:/app/uploads
+      - audit_logs:/app/logs
+      - evidence_review:/app/backend/data/evidence-review
+      - evaluation_results:/app/backend/evaluation/results
+      - bm25_index:/app/data/bm25
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/api/health/ready', timeout=3).read()"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 40s
+
+  # ── Celery Worker（异步任务） ─────────────────
+  worker:
+    <<: *backend-service
+    # Add only the isolated evaluation dependency group to the Worker image.
+    build:
+      context: .
+      dockerfile: backend/Dockerfile.evaluation-worker
+    image: agenthub-evaluation-worker:2.0.0
+    container_name: agenthub-worker
+    environment:
+      <<: *backend-environment
+    command: ["celery", "-A", "infrastructure.celery_app", "worker", "--loglevel=info", "--concurrency=${WORKER_CONCURRENCY:-1}", "-Q", "default,maintenance,update,evaluation"]
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      neo4j:
+        condition: service_healthy
+      chromadb:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    volumes:
+      - uploads:/app/uploads
+      - bm25_index:/app/data/bm25
+      - evidence_review:/app/backend/data/evidence-review
+      - evaluation_results:/app/backend/evaluation/results
+    healthcheck:
+      disable: true
+
+  # ── Parser Worker（独立 ingestion 队列；本地 Compose 不等同 K8s egress 隔离） ──
+  parser-worker:
+    <<: *backend-service
+    # Reuse the API image; the API service is the single backend image builder.
+    image: agenthub-api:2.0.0
+    container_name: agenthub-parser
+    environment:
+      <<: *backend-environment
+    command: ["celery", "-A", "infrastructure.celery_app", "worker", "--loglevel=info", "--concurrency=1", "--time-limit=900", "--soft-time-limit=840", "-Q", "parser"]
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      neo4j:
+        condition: service_healthy
+      chromadb:
+        condition: service_healthy
+    volumes:
+      - uploads:/app/uploads
+      - bm25_index:/app/data/bm25
+    healthcheck:
+      disable: true
+
+  # ── React 前端（Nginx 静态服务与 API 反向代理） ──
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+    image: agenthub-frontend:2.0.0
+    container_name: agenthub-frontend
+    restart: unless-stopped
+    init: true
+    read_only: true
+    ports:
+      - "${FRONTEND_PORT:-5173}:8080"
+    depends_on:
+      api:
+        condition: service_healthy
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    networks:
+      - agenthub
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/healthz"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+networks:
+  agenthub:
+    driver: bridge
+
+volumes:
+  neo4j_data:
+  chroma_data:
+  redis_data:
+  kafka_data:
+  uploads:
+  audit_logs:
+  postgres_data:
+  evaluation_results:
+  bm25_index:
+  evidence_review:
